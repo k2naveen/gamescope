@@ -1356,11 +1356,14 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 	// 2. When compositing HDR content as a fallback when we undock, it avoids introducing
 	// a bunch of horrible banding when going to G2.2 curve.
 	// It ensures that we can dither that.
-	g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010);
+	bool allow_10bit = ::cv_max_bpp >= 10;
+	bool allow_8bit = ::cv_max_bpp >= 8;
+
+	g_nDRMFormat = allow_10bit ? pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010) : DRM_FORMAT_INVALID;
 	if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
-		g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010);
+		g_nDRMFormat = allow_10bit ? pick_plane_format(&drm->primary_formats, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010) : DRM_FORMAT_INVALID;
 		if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
-			g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888);
+			g_nDRMFormat = allow_8bit ? pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888) : DRM_FORMAT_INVALID;
 			if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
 				drm_log.errorf("Primary plane doesn't support any formats >= 8888");
 				return false;
@@ -1370,11 +1373,11 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 
 	if (have_overlay_planes(drm)) {
 		// ARGB8888 is the Xformat and AFormat here in this function as we want transparent overlay
-		g_nDRMFormatOverlay = pick_plane_format(&drm->formats, DRM_FORMAT_ARGB2101010, DRM_FORMAT_ARGB2101010);
+		g_nDRMFormatOverlay = allow_10bit ? pick_plane_format(&drm->formats, DRM_FORMAT_ARGB2101010, DRM_FORMAT_ARGB2101010) : DRM_FORMAT_INVALID;
 		if ( g_nDRMFormatOverlay == DRM_FORMAT_INVALID ) {
-			g_nDRMFormatOverlay = pick_plane_format(&drm->formats, DRM_FORMAT_ABGR2101010, DRM_FORMAT_ABGR2101010);
+			g_nDRMFormatOverlay = allow_10bit ? pick_plane_format(&drm->formats, DRM_FORMAT_ABGR2101010, DRM_FORMAT_ABGR2101010) : DRM_FORMAT_INVALID;
 			if ( g_nDRMFormatOverlay == DRM_FORMAT_INVALID ) {
-				g_nDRMFormatOverlay = pick_plane_format(&drm->formats, DRM_FORMAT_ARGB8888, DRM_FORMAT_ARGB8888);
+				g_nDRMFormatOverlay = allow_8bit ? pick_plane_format(&drm->formats, DRM_FORMAT_ARGB8888, DRM_FORMAT_ARGB8888) : DRM_FORMAT_INVALID;
 				if ( g_nDRMFormatOverlay == DRM_FORMAT_INVALID ) {
 					drm_log.errorf("Overlay plane doesn't support any formats >= 8888");
 					return false;

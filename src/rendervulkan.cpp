@@ -3141,11 +3141,15 @@ bool vulkan_make_swapchain( VulkanOutput_t *pOutput )
 	uint32_t surfaceFormat = formatCount;
 	VkColorSpaceKHR preferredColorSpace = g_bOutputHDREnabled ? VK_COLOR_SPACE_HDR10_ST2084_EXT : VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
+	extern gamescope::ConVar<int> cv_max_bpp;
+	bool allow_10bit = cv_max_bpp >= 10;
+	bool allow_8bit = cv_max_bpp >= 8;
+
 	if ( surfaceFormat == formatCount )
 	{
 		for ( surfaceFormat = 0; surfaceFormat < formatCount; surfaceFormat++ )
 		{
-			if ( pOutput->surfaceFormats[ surfaceFormat ].format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
+			if ( allow_10bit && pOutput->surfaceFormats[ surfaceFormat ].format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
 				 pOutput->surfaceFormats[ surfaceFormat ].colorSpace == preferredColorSpace )
 				break;
 		}
@@ -3155,7 +3159,7 @@ bool vulkan_make_swapchain( VulkanOutput_t *pOutput )
 	{
 		for ( surfaceFormat = 0; surfaceFormat < formatCount; surfaceFormat++ )
 		{
-			if ( pOutput->surfaceFormats[ surfaceFormat ].format == VK_FORMAT_A2R10G10B10_UNORM_PACK32 &&
+			if ( allow_10bit && pOutput->surfaceFormats[ surfaceFormat ].format == VK_FORMAT_A2R10G10B10_UNORM_PACK32 &&
 				 pOutput->surfaceFormats[ surfaceFormat ].colorSpace == preferredColorSpace )
 				break;
 		}
@@ -3165,7 +3169,7 @@ bool vulkan_make_swapchain( VulkanOutput_t *pOutput )
 	{
 		for ( surfaceFormat = 0; surfaceFormat < formatCount; surfaceFormat++ )
 		{
-			if ( pOutput->surfaceFormats[ surfaceFormat ].format == VK_FORMAT_B8G8R8A8_UNORM &&
+			if ( allow_8bit && pOutput->surfaceFormats[ surfaceFormat ].format == VK_FORMAT_B8G8R8A8_UNORM &&
 				 pOutput->surfaceFormats[ surfaceFormat ].colorSpace == preferredColorSpace )
 				break;
 		}

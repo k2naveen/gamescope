@@ -456,6 +456,8 @@ bool g_bSupportsHDR_CachedValue = false;
 bool g_bForceHDR10OutputDebug = false;
 gamescope::ConVar<bool> cv_hdr_enabled{ "hdr_enabled", false, "Whether or not HDR is enabled if it is available." };
 bool g_bHDRItmEnable = false;
+
+gamescope::ConVar<int> cv_max_bpp{ "max_bpp", 10, "Maximum bits per pixel for output (8 or 10). Helps reduce power consumption." };
 int g_nCurrentRefreshRate_CachedValue = 0;
 
 static void
