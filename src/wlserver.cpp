@@ -57,6 +57,7 @@
 #include "wlserver.hpp"
 #include "hdmi.h"
 #include "main.hpp"
+#include "convar.h"
 #include "steamcompmgr.hpp"
 #include "color_helpers.h"
 #include "log.hpp"
@@ -332,6 +333,33 @@ static void wlserver_handle_key(struct wl_listener *listener, void *data)
 			wlserver_keyboardfocus( old_kb_surf, false );
 			return;
 		}
+	}
+
+	// Handle Ctrl+Up/Down to adjust max_bpp for power saving.
+	if ( event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+		 ( keysym == XKB_KEY_Up || keysym == XKB_KEY_Down ) &&
+		 xkb_state_mod_name_is_active( keyboard->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE ) > 0 )
+	{
+		int current_bpp = cv_max_bpp;
+		int new_bpp = current_bpp;
+
+		if ( keysym == XKB_KEY_Up )
+		{
+			// Increase max_bpp (8 -> 10 -> 12)
+			new_bpp = std::min( current_bpp + 2, 12 );
+		}
+		else if ( keysym == XKB_KEY_Down )
+		{
+			// Decrease max_bpp (12 -> 10 -> 8)
+			new_bpp = std::max( current_bpp - 2, 8 );
+		}
+
+		if ( new_bpp != current_bpp )
+		{
+			cv_max_bpp = new_bpp;
+			nudge_steamcompmgr();
+		}
+		return;
 	}
 	
 	if ( !wlserver_process_hotkeys( keyboard, event->keycode, event->state == WL_KEYBOARD_KEY_STATE_PRESSED ) )

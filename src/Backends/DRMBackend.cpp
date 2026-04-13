@@ -378,6 +378,7 @@ namespace gamescope
 			std::optional<CDRMAtomicProperty> vrr_capable;
 			std::optional<CDRMAtomicProperty> EDID;
 			std::optional<CDRMAtomicProperty> Broadcast_RGB;
+			std::optional<CDRMAtomicProperty> max_bpc;
 			std::optional<CDRMAtomicProperty> DUMMY_END;
 		};
 		      ConnectorProperties &GetProperties()       { return m_Props; }
@@ -1356,6 +1357,9 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 	// 2. When compositing HDR content as a fallback when we undock, it avoids introducing
 	// a bunch of horrible banding when going to G2.2 curve.
 	// It ensures that we can dither that.
+	//
+	// Runtime max_bpp control is handled exclusively via the KMS connector max bpc property.
+
 	g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010);
 	if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
 		g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010);
@@ -1386,6 +1390,7 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 		case DRM_FORMAT_XRGB2101010:
 			g_nDRMFormatOverlay = DRM_FORMAT_ARGB2101010;
 			break;
+		case DRM_FORMAT_XBGR2101010:
 		case DRM_FORMAT_ABGR2101010:
 			g_nDRMFormatOverlay = DRM_FORMAT_ABGR2101010;
 			break;
@@ -2178,6 +2183,7 @@ namespace gamescope
 			m_Props.vrr_capable              = CDRMAtomicProperty::Instantiate( "vrr_capable",            this, *rawProperties );
 			m_Props.EDID                     = CDRMAtomicProperty::Instantiate( "EDID",                   this, *rawProperties );
 			m_Props.Broadcast_RGB            = CDRMAtomicProperty::Instantiate( "Broadcast RGB",          this, *rawProperties );
+			m_Props.max_bpc                  = CDRMAtomicProperty::Instantiate( "max bpc",               this, *rawProperties );
 		}
 
 		ParseEDID();
@@ -2965,6 +2971,9 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
 
 			if ( pConnector->GetProperties().Broadcast_RGB )
 				pConnector->GetProperties().Broadcast_RGB->SetPendingValue( drm->req, 0, bForceInRequest );
+
+			if ( pConnector->GetProperties().max_bpc )
+				pConnector->GetProperties().max_bpc->SetPendingValue( drm->req, 0, bForceInRequest );
 		}
 
 		for ( std::unique_ptr< gamescope::CDRMCRTC > &pCRTC : drm->crtcs )
@@ -3030,6 +3039,9 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
 
 		if ( drm->pConnector->GetProperties().Broadcast_RGB )
 			drm->pConnector->GetProperties().Broadcast_RGB->SetPendingValue( drm->req, eBroadcastRGB, bForceInRequest );
+
+		if ( drm->pConnector->GetProperties().max_bpc )
+			drm->pConnector->GetProperties().max_bpc->SetPendingValue( drm->req, (uint64_t)::cv_max_bpp, bForceInRequest );
 	}
 
 	if ( drm->pCRTC && !bSleep )
@@ -3449,6 +3461,11 @@ namespace gamescope
         {
 			*pPrimaryPlaneFormat = g_nDRMFormat;
 			*pOverlayPlaneFormat = g_nDRMFormatOverlay;
+        }
+        virtual void RefreshOutputFormats() override
+        {
+			// max_bpc change requires a modeset-enabled atomic commit.
+			g_DRM.needs_modeset = true;
         }
 		virtual bool ValidPhysicalDevice( VkPhysicalDevice pVkPhysicalDevice ) const override
 		{
