@@ -456,6 +456,8 @@ bool g_bSupportsHDR_CachedValue = false;
 bool g_bForceHDR10OutputDebug = false;
 gamescope::ConVar<bool> cv_hdr_enabled{ "hdr_enabled", false, "Whether or not HDR is enabled if it is available." };
 bool g_bHDRItmEnable = false;
+
+gamescope::ConVar<int> cv_max_bpp{ "max_bpp", 12, "Maximum bits per pixel for output (8, 10, or 12). Helps reduce power consumption." };
 int g_nCurrentRefreshRate_CachedValue = 0;
 
 static void
@@ -885,6 +887,7 @@ uint32_t		currentOutputWidth, currentOutputHeight;
 int 			currentOutputRefresh;
 bool			currentHDROutput = false;
 bool			currentHDRForce = false;
+int				currentMaxBpp = 12;
 
 std::vector< uint32_t > vecFocuscontrolAppIDs;
 
@@ -1848,7 +1851,9 @@ bool MouseCursor::getTexture()
 	}
 
 	CVulkanTexture::createFlags texCreateFlags;
-	texCreateFlags.bFlippable = true;
+	// Cursor is composited into the scene and does not need a KMS FB import.
+	// Importing tiny linear cursor dmabufs as FBs can fail on some drivers.
+	texCreateFlags.bFlippable = false;
 	if ( GetBackend()->SupportsPlaneHardwareCursor() )
 	{
 		texCreateFlags.bLinear = true; // cursor buffer needs to be linear
@@ -8546,11 +8551,14 @@ steamcompmgr_main(int argc, char **argv)
 		// Pick our width/height for this potential frame, regardless of how it might change later
 		// At some point we might even add proper locking so we get real updates atomically instead
 		// of whatever jumble of races the below might cause over a couple of frames
-		if ( currentOutputWidth != g_nOutputWidth ||
-			 currentOutputHeight != g_nOutputHeight ||
-			 currentOutputRefresh != g_nOutputRefresh ||
-			 currentHDROutput != g_bOutputHDREnabled ||
-			 currentHDRForce != g_bForceHDRSupportDebug )
+		bool bDisplayConfigChanged = currentOutputWidth != g_nOutputWidth ||
+			currentOutputHeight != g_nOutputHeight ||
+			currentOutputRefresh != g_nOutputRefresh ||
+			currentHDROutput != g_bOutputHDREnabled ||
+			currentHDRForce != g_bForceHDRSupportDebug;
+		bool bMaxBppChanged = currentMaxBpp != (int)cv_max_bpp;
+
+		if ( bDisplayConfigChanged || bMaxBppChanged )
 		{
 			if ( g_nXWaylandCount > 1 )
 			{
@@ -8562,16 +8570,27 @@ steamcompmgr_main(int argc, char **argv)
 			}
 
 			// XXX(JoshA): Remake this. It sucks.
-			if ( GetBackend()->UsesVulkanSwapchain() )
+			// If max_bpp changed, only update the connector property via RefreshOutputFormats
+			// (which sets needs_modeset). Do NOT rebuild Vulkan output images for a max_bpp-only
+			// change — that causes xe_bo_is_vm_bound failures on Intel Xe.
+			if ( bMaxBppChanged )
 			{
-				vulkan_remake_swapchain();
-
-				while ( !acquire_next_image() )
-					vulkan_remake_swapchain();
+				GetBackend()->RefreshOutputFormats();
 			}
-			else
+
+			if ( bDisplayConfigChanged )
 			{
-				vulkan_remake_output_images();
+				if ( GetBackend()->UsesVulkanSwapchain() )
+				{
+					vulkan_remake_swapchain();
+
+					while ( !acquire_next_image() )
+						vulkan_remake_swapchain();
+				}
+				else
+				{
+					vulkan_remake_output_images();
+				}
 			}
 
 
@@ -8601,6 +8620,7 @@ steamcompmgr_main(int argc, char **argv)
 			currentOutputRefresh = g_nOutputRefresh;
 			currentHDROutput = g_bOutputHDREnabled;
 			currentHDRForce = g_bForceHDRSupportDebug;
+			currentMaxBpp = (int)cv_max_bpp;
 
 #if HAVE_PIPEWIRE
 			nudge_pipewire();

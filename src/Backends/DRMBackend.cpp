@@ -378,6 +378,7 @@ namespace gamescope
 			std::optional<CDRMAtomicProperty> vrr_capable;
 			std::optional<CDRMAtomicProperty> EDID;
 			std::optional<CDRMAtomicProperty> Broadcast_RGB;
+			std::optional<CDRMAtomicProperty> max_bpc;
 			std::optional<CDRMAtomicProperty> DUMMY_END;
 		};
 		      ConnectorProperties &GetProperties()       { return m_Props; }
@@ -1356,11 +1357,14 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 	// 2. When compositing HDR content as a fallback when we undock, it avoids introducing
 	// a bunch of horrible banding when going to G2.2 curve.
 	// It ensures that we can dither that.
-	g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010);
+	bool allow_10bit = ::cv_max_bpp >= 10;
+	bool allow_8bit = ::cv_max_bpp >= 8;
+
+	g_nDRMFormat = allow_10bit ? pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010) : DRM_FORMAT_INVALID;
 	if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
-		g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010);
+		g_nDRMFormat = allow_10bit ? pick_plane_format(&drm->primary_formats, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010) : DRM_FORMAT_INVALID;
 		if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
-			g_nDRMFormat = pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888);
+			g_nDRMFormat = allow_8bit ? pick_plane_format(&drm->primary_formats, DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888) : DRM_FORMAT_INVALID;
 			if ( g_nDRMFormat == DRM_FORMAT_INVALID ) {
 				drm_log.errorf("Primary plane doesn't support any formats >= 8888");
 				return false;
@@ -1370,11 +1374,11 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 
 	if (have_overlay_planes(drm)) {
 		// ARGB8888 is the Xformat and AFormat here in this function as we want transparent overlay
-		g_nDRMFormatOverlay = pick_plane_format(&drm->formats, DRM_FORMAT_ARGB2101010, DRM_FORMAT_ARGB2101010);
+		g_nDRMFormatOverlay = allow_10bit ? pick_plane_format(&drm->formats, DRM_FORMAT_ARGB2101010, DRM_FORMAT_ARGB2101010) : DRM_FORMAT_INVALID;
 		if ( g_nDRMFormatOverlay == DRM_FORMAT_INVALID ) {
-			g_nDRMFormatOverlay = pick_plane_format(&drm->formats, DRM_FORMAT_ABGR2101010, DRM_FORMAT_ABGR2101010);
+			g_nDRMFormatOverlay = allow_10bit ? pick_plane_format(&drm->formats, DRM_FORMAT_ABGR2101010, DRM_FORMAT_ABGR2101010) : DRM_FORMAT_INVALID;
 			if ( g_nDRMFormatOverlay == DRM_FORMAT_INVALID ) {
-				g_nDRMFormatOverlay = pick_plane_format(&drm->formats, DRM_FORMAT_ARGB8888, DRM_FORMAT_ARGB8888);
+				g_nDRMFormatOverlay = allow_8bit ? pick_plane_format(&drm->formats, DRM_FORMAT_ARGB8888, DRM_FORMAT_ARGB8888) : DRM_FORMAT_INVALID;
 				if ( g_nDRMFormatOverlay == DRM_FORMAT_INVALID ) {
 					drm_log.errorf("Overlay plane doesn't support any formats >= 8888");
 					return false;
@@ -1386,6 +1390,7 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 		case DRM_FORMAT_XRGB2101010:
 			g_nDRMFormatOverlay = DRM_FORMAT_ARGB2101010;
 			break;
+		case DRM_FORMAT_XBGR2101010:
 		case DRM_FORMAT_ABGR2101010:
 			g_nDRMFormatOverlay = DRM_FORMAT_ABGR2101010;
 			break;
@@ -1608,8 +1613,24 @@ gamescope::OwningRc<gamescope::IBackendFb> drm_fbid_from_dmabuf( struct drm_t *d
 
 		if ( drmModeAddFB2WithModifiers( drm->fd, dma_buf->width, dma_buf->height, dma_buf->format, handles, dma_buf->stride, dma_buf->offset, modifiers, &fb_id, DRM_MODE_FB_MODIFIERS ) != 0 )
 		{
-			drm_log.errorf_errno("drmModeAddFB2WithModifiers failed");
-			goto out;
+			drm_log.errorf( "AddFB2WithModifiers args: format=0x%" PRIX32 " modifier=0x%" PRIX64 " %ux%u stride0=%u offset0=%u", dma_buf->format, dma_buf->modifier, dma_buf->width, dma_buf->height, dma_buf->stride[0], dma_buf->offset[0] );
+
+			// Some drivers reject explicit linear modifier FB creation even though
+			// the same buffer can be imported through AddFB2 without modifiers.
+			if ( dma_buf->modifier == DRM_FORMAT_MOD_LINEAR )
+			{
+				drm_log.infof( "Retrying FB import via drmModeAddFB2 without modifiers for linear buffer" );
+				if ( drmModeAddFB2( drm->fd, dma_buf->width, dma_buf->height, dma_buf->format, handles, dma_buf->stride, dma_buf->offset, &fb_id, 0 ) != 0 )
+				{
+					drm_log.errorf_errno("drmModeAddFB2 fallback failed");
+					goto out;
+				}
+			}
+			else
+			{
+				drm_log.errorf_errno("drmModeAddFB2WithModifiers failed");
+				goto out;
+			}
 		}
 	}
 	else
@@ -2178,6 +2199,7 @@ namespace gamescope
 			m_Props.vrr_capable              = CDRMAtomicProperty::Instantiate( "vrr_capable",            this, *rawProperties );
 			m_Props.EDID                     = CDRMAtomicProperty::Instantiate( "EDID",                   this, *rawProperties );
 			m_Props.Broadcast_RGB            = CDRMAtomicProperty::Instantiate( "Broadcast RGB",          this, *rawProperties );
+			m_Props.max_bpc                  = CDRMAtomicProperty::Instantiate( "max bpc",               this, *rawProperties );
 		}
 
 		ParseEDID();
@@ -2965,6 +2987,9 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
 
 			if ( pConnector->GetProperties().Broadcast_RGB )
 				pConnector->GetProperties().Broadcast_RGB->SetPendingValue( drm->req, 0, bForceInRequest );
+
+			if ( pConnector->GetProperties().max_bpc )
+				pConnector->GetProperties().max_bpc->SetPendingValue( drm->req, 0, bForceInRequest );
 		}
 
 		for ( std::unique_ptr< gamescope::CDRMCRTC > &pCRTC : drm->crtcs )
@@ -3030,6 +3055,9 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
 
 		if ( drm->pConnector->GetProperties().Broadcast_RGB )
 			drm->pConnector->GetProperties().Broadcast_RGB->SetPendingValue( drm->req, eBroadcastRGB, bForceInRequest );
+
+		if ( drm->pConnector->GetProperties().max_bpc )
+			drm->pConnector->GetProperties().max_bpc->SetPendingValue( drm->req, (uint64_t)::cv_max_bpp, bForceInRequest );
 	}
 
 	if ( drm->pCRTC && !bSleep )
@@ -3449,6 +3477,11 @@ namespace gamescope
         {
 			*pPrimaryPlaneFormat = g_nDRMFormat;
 			*pOverlayPlaneFormat = g_nDRMFormatOverlay;
+        }
+        virtual void RefreshOutputFormats() override
+        {
+			// max_bpc change requires a modeset-enabled atomic commit.
+			g_DRM.needs_modeset = true;
         }
 		virtual bool ValidPhysicalDevice( VkPhysicalDevice pVkPhysicalDevice ) const override
 		{

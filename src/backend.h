@@ -316,6 +316,8 @@ namespace gamescope
         virtual std::span<const char *const> GetDeviceExtensions( VkPhysicalDevice pVkPhysicalDevice ) const = 0;
         virtual VkImageLayout GetPresentLayout() const = 0;
         virtual void GetPreferredOutputFormat( uint32_t *pPrimaryPlaneFormat, uint32_t *pOverlayPlaneFormat ) const = 0;
+        // Called when cv_max_bpp changes at runtime.
+        virtual void RefreshOutputFormats() {}
         virtual bool ValidPhysicalDevice( VkPhysicalDevice pVkPhysicalDevice ) const = 0;
 
         virtual void DirtyState( bool bForce = false, bool bForceModeset = false ) = 0;
