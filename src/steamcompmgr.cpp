@@ -458,6 +458,7 @@ gamescope::ConVar<bool> cv_hdr_enabled{ "hdr_enabled", false, "Whether or not HD
 bool g_bHDRItmEnable = false;
 
 gamescope::ConVar<int> cv_max_bpp{ "max_bpp", 12, "Maximum bits per pixel for output (8, 10, or 12). Helps reduce power consumption." };
+gamescope::ConVar<int> cv_fps_cap{ "fps_cap", 0, "Hotkey-controlled FPS cap (0 = disabled). Cycles through presets via Ctrl+Left/Right for battery saving." };
 int g_nCurrentRefreshRate_CachedValue = 0;
 
 static void
@@ -976,6 +977,17 @@ static void _update_app_target_refresh_cycle()
 	{
 		auto rates = GetBackend()->GetCurrentConnector()->GetValidDynamicRefreshRates();
 
+		// If the requested cap exactly matches a supported dynamic mode,
+		// prefer that exact mode to make hotkey stepping deterministic.
+		for ( uint32_t rate : rates )
+		{
+			if ( rate == (uint32_t)target_fps )
+			{
+				g_nDynamicRefreshRate[ type ] = rate;
+				return;
+			}
+		}
+
 		// Find highest mode to do refresh doubling with.
 		for ( auto rate = rates.rbegin(); rate != rates.rend(); rate++ )
 		{
@@ -991,13 +1003,38 @@ static void _update_app_target_refresh_cycle()
 static void update_app_target_refresh_cycle()
 {
 	int nPrevFPSLimit = g_nSteamCompMgrTargetFPS;
+	int nPrevDynamicRefreshRate[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = {
+		g_nDynamicRefreshRate[0],
+		g_nDynamicRefreshRate[1],
+	};
 	_update_app_target_refresh_cycle();
 	if ( !!g_nSteamCompMgrTargetFPS != !!nPrevFPSLimit )
 		update_runtime_info();
+
+	if ( GetBackend()->GetCurrentConnector() )
+	{
+		gamescope::GamescopeScreenType type = GetBackend()->GetCurrentConnector()->GetScreenType();
+		if ( nPrevFPSLimit != g_nSteamCompMgrTargetFPS ||
+			nPrevDynamicRefreshRate[type] != g_nDynamicRefreshRate[type] )
+		{
+			xwm_log.infof(
+				"FPS/RR state updated: screen=%d fps_limit=%d dynamic_rr=%dHz",
+				type,
+				g_nSteamCompMgrTargetFPS,
+				g_nDynamicRefreshRate[type] );
+		}
+	}
 }
 
 void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType type, int override_fps, bool change_refresh, bool change_fps_cap )
 {
+	xwm_log.infof(
+		"FPS override request: screen=%d fps=%d change_refresh=%d change_fps_cap=%d",
+		type,
+		override_fps,
+		change_refresh,
+		change_fps_cap );
+
 	g_nCombinedAppRefreshCycleOverride[ type ] = override_fps;
 	g_nCombinedAppRefreshCycleChangeRefresh[ type ] = change_refresh;
 	g_nCombinedAppRefreshCycleChangeFPS[ type ] = change_fps_cap;
@@ -2787,6 +2824,11 @@ paint_all( global_focus_t *pFocus, bool async )
 		}
 		else if ( g_uDynamicRefreshEqualityTime + g_uDynamicRefreshDelay < now )
 		{
+			xwm_log.infof(
+				"Requesting dynamic refresh switch: current=%dHz target=%dHz fps_limit=%d",
+				nCurrentDynamicOutputHz,
+				nTargetRefreshHz,
+				g_nSteamCompMgrTargetFPS );
 			GetBackend()->HackTemporarySetDynamicRefresh( nTargetRefreshHz );
 		}
 	}
@@ -8560,6 +8602,16 @@ steamcompmgr_main(int argc, char **argv)
 
 		if ( bDisplayConfigChanged || bMaxBppChanged )
 		{
+			if ( currentOutputRefresh != g_nOutputRefresh )
+			{
+				xwm_log.infof(
+					"Observed output refresh change: %dHz (%dmHz) -> %dHz (%dmHz)",
+					gamescope::ConvertmHzToHz( currentOutputRefresh ),
+					currentOutputRefresh,
+					gamescope::ConvertmHzToHz( g_nOutputRefresh ),
+					g_nOutputRefresh );
+			}
+
 			if ( g_nXWaylandCount > 1 )
 			{
 				g_nNestedHeight = ( g_nNestedWidth * g_nOutputHeight ) / g_nOutputWidth;
@@ -8625,6 +8677,20 @@ steamcompmgr_main(int argc, char **argv)
 #if HAVE_PIPEWIRE
 			nudge_pipewire();
 #endif
+		}
+
+		// Apply hotkey-driven FPS cap changes.
+		{
+			static int s_nLastFpsCap = 0;
+			int nNewFpsCap = (int)cv_fps_cap;
+			if ( s_nLastFpsCap != nNewFpsCap )
+			{
+				int nPrevFpsCap = s_nLastFpsCap;
+				s_nLastFpsCap = nNewFpsCap;
+				xwm_log.infof( "Applying hotkey FPS cap change: %d -> %d", nPrevFpsCap, nNewFpsCap );
+				steamcompmgr_set_app_refresh_cycle_override(
+					GetBackend()->GetScreenType(), nNewFpsCap, true, true );
+			}
 		}
 
 		// Ask for a new surface every vblank

@@ -361,6 +361,104 @@ static void wlserver_handle_key(struct wl_listener *listener, void *data)
 		}
 		return;
 	}
+
+	// Handle Ctrl+Left/Right to step refresh/FPS cap according to connector-supported dynamic rates.
+	// Ctrl+Left reduces and Ctrl+Right increases.
+	// If cap is currently 0 (uncapped), anchor to current output refresh before stepping.
+	if ( event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+		 ( keysym == XKB_KEY_Left || keysym == XKB_KEY_Right ) &&
+		 xkb_state_mod_name_is_active( keyboard->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE ) > 0 )
+	{
+		static bool s_bLoggedDiscoveredRates = false;
+
+		gamescope::IBackendConnector *pConn = GetBackend()->GetCurrentConnector();
+		if ( !pConn )
+		{
+			wl_log.infof( "WARNING: FPS hotkey request ignored: no active connector" );
+			return;
+		}
+
+		std::vector<uint32_t> rates = { pConn->GetValidDynamicRefreshRates().begin(), pConn->GetValidDynamicRefreshRates().end() };
+		std::sort( rates.begin(), rates.end() );
+		rates.erase( std::unique( rates.begin(), rates.end() ), rates.end() );
+
+		const bool bSupportsVRR = pConn->SupportsVRR();
+		if ( !s_bLoggedDiscoveredRates )
+		{
+			std::string rateList;
+			for ( size_t i = 0; i < rates.size(); i++ )
+			{
+				rateList += std::to_string( rates[i] );
+				if ( i + 1 < rates.size() )
+					rateList += ",";
+			}
+			if ( rateList.empty() )
+				rateList = "<none>";
+
+			wl_log.infof(
+				"FPS hotkey discovered dynamic rates (one-time): supports_vrr=%d rate_count=%zu rates=%s",
+				bSupportsVRR,
+				rates.size(),
+				rateList.c_str() );
+			s_bLoggedDiscoveredRates = true;
+		}
+
+		if ( rates.size() < 2 )
+		{
+			wl_log.infof(
+				"WARNING: FPS hotkey request ignored: panel does not support dynamic refresh switching (supports_vrr=%d rate_count=%zu)",
+				bSupportsVRR,
+				rates.size() );
+			return;
+		}
+
+		int current_cap = cv_fps_cap;
+		int effective_cap = current_cap;
+		if ( effective_cap <= 0 )
+			effective_cap = gamescope::ConvertmHzToHz( g_nOutputRefresh );
+
+		int current_idx = 0;
+		int best_diff = INT_MAX;
+		for ( size_t i = 0; i < rates.size(); i++ )
+		{
+			int diff = std::abs( (int)rates[i] - effective_cap );
+			if ( diff < best_diff )
+			{
+				best_diff = diff;
+				current_idx = (int)i;
+			}
+		}
+
+		int new_idx = current_idx;
+		if ( keysym == XKB_KEY_Left )
+			new_idx = std::max( current_idx - 1, 0 );
+		else
+			new_idx = std::min( current_idx + 1, (int)rates.size() - 1 );
+
+		wl_log.infof( "FPS hotkey event: key=%s current_cap=%d effective_cap=%d current_idx=%d target_idx=%d range=[%u,%u] count=%zu supports_vrr=%d",
+			keysym == XKB_KEY_Right ? "Ctrl+Right" : "Ctrl+Left",
+			current_cap,
+			effective_cap,
+			current_idx,
+			new_idx,
+			rates.front(),
+			rates.back(),
+			rates.size(),
+			bSupportsVRR );
+
+		if ( new_idx != current_idx )
+		{
+			int new_cap = (int)rates[new_idx];
+			wl_log.infof( "FPS hotkey applying cap change: %d -> %d", current_cap, new_cap );
+			cv_fps_cap = new_cap;
+			nudge_steamcompmgr();
+		}
+		else
+		{
+			wl_log.infof( "FPS hotkey cap unchanged at boundary: %d", current_cap );
+		}
+		return;
+	}
 	
 	if ( !wlserver_process_hotkeys( keyboard, event->keycode, event->state == WL_KEYBOARD_KEY_STATE_PRESSED ) )
 	{
